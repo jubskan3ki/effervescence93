@@ -1,0 +1,28 @@
+﻿{
+	"extends": "./.svelte-kit/tsconfig.json",
+	"compilerOptions": {
+		"module": "es2022",
+		"target": "es2022",
+		"moduleResolution": "bundler",
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"useUnknownInCatchVariables": true,
+		"skipLibCheck": true,
+		"esModuleInterop": true,
+		"allowSyntheticDefaultImports": true,
+		"resolveJsonModule": true,
+		"types": ["@sveltejs/kit", "svelte", "vite/client", "node"],
+		"sourceMap": true,
+		"ignoreDeprecations": "5.0",
+		"verbatimModuleSyntax": true,
+		"baseUrl": ".",
+		"paths": {
+			"@components/*": ["src/lib/components/*"],
+			"@lib/*": ["src/lib/*"],
+			"@stores/*": ["src/lib/stores/*"],
+			"@api/*": ["src/lib/api/*"]
+		}
+	},
+	"include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.svelte"],
+	"exclude": ["node_modules", "dist", ".svelte-kit"]
+}

@@ -1,0 +1,56 @@
+// ===== tsconfig.json =====
+{
+	"compilerOptions": {
+		// Module system
+		"module": "commonjs",
+		"target": "ES2022",
+		"moduleResolution": "node",
+		"lib": ["ES2022"],
+
+		// Paths
+		"baseUrl": ".",
+		"paths": {
+			"@app/*": ["src/*"],
+			"@modules/*": ["src/modules/*"],
+			"@common/*": ["src/common/*"]
+		},
+		"rootDir": ".",
+		"outDir": "dist",
+
+		// Types
+		"types": ["node", "express"],
+
+		// Module resolution
+		"resolveJsonModule": true,
+		"allowSyntheticDefaultImports": true,
+		"esModuleInterop": true,
+
+		// Decorators (pour NestJS)
+		"experimentalDecorators": true,
+		"emitDecoratorMetadata": true,
+
+		// Strict checks
+		"strict": true,
+		"strictPropertyInitialization": false, // Pour les DTOs
+		"noImplicitOverride": true,
+		"noFallthroughCasesInSwitch": true,
+		"noImplicitReturns": true,
+		"noUnusedLocals": false,
+		"noUnusedParameters": false,
+		"forceConsistentCasingInFileNames": true,
+
+		// Output
+		"sourceMap": true,
+		"declaration": true,
+		"removeComments": true,
+
+		// Performance
+		"skipLibCheck": true,
+		"incremental": true
+	},
+	"include": ["src/**/*.ts", "prisma/**/*.ts"],
+	"exclude": ["node_modules", "dist", "coverage", "**/*.spec.ts", "**/*.test.ts"],
+	"ts-node": {
+		"require": ["tsconfig-paths/register"]
+	}
+}

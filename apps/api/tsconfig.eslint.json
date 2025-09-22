@@ -1,0 +1,10 @@
+// ===== tsconfig.eslint.json =====
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"allowJs": true,
+		"noEmit": true
+	},
+	"include": ["src/**/*.ts", "src/**/*.js", "prisma/**/*.ts", "test/**/*.ts"],
+	"exclude": ["dist", "node_modules", "coverage"]
+}

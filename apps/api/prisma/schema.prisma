@@ -1,0 +1,126 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  EDITOR
+}
+
+model User {
+  id          String    @id @default(cuid())
+  email       String    @unique
+  password    String
+  role        Role      @default(EDITOR)
+  isApproved  Boolean   @default(false)
+  approvedAt  DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+model Sector {
+  id         String      @id @default(cuid())
+  name       String      @unique
+  colorHex   String
+  exhibitors Exhibitor[]
+}
+
+model Exhibitor {
+  id          String    @id @default(cuid())
+  name        String
+  slug        String    @unique
+  logoUrl     String?
+  description String?   @db.Text
+  websiteUrl  String?
+  linkedinUrl String?
+  pdfUrl      String?
+
+  sectorId String
+  sector   Sector @relation(fields: [sectorId], references: [id])
+
+  boothId String? @unique
+  booth   Booth?  @relation(fields: [boothId], references: [id])
+
+  contacts  Contact[]
+  themes    Theme[]    @relation("ExhibitorThemes")
+  favorites Favorite[]
+
+  createdAt DateTime @default(now())
+
+  @@index([name])
+  @@index([slug])
+}
+
+model Booth {
+  id        String     @id @default(cuid())
+  number    String     @unique
+  polygonId String     @unique
+
+  x         Float      // Position X en pixels
+  y         Float      // Position Y en pixels
+  width     Float?     // Largeur en pixels (optionnel)
+  height    Float?     // Hauteur en pixels (optionnel)
+  rotation  Float?     @default(0) // Rotation en degrés (optionnel)
+
+  polygonPoints String? @db.Text // Format: "x1,y1 x2,y2 x3,y3..."
+
+  exhibitor Exhibitor?
+
+  @@index([polygonId])
+  @@index([number])
+  @@index([x, y]) // Index spatial pour optimiser les requêtes par zone
+}
+
+model Contact {
+  id          String    @id @default(cuid())
+  firstName   String
+  lastName    String
+  role        String
+  email       String
+  phone       String?
+  exhibitorId String
+  exhibitor   Exhibitor @relation(fields: [exhibitorId], references: [id], onDelete: Cascade)
+}
+
+model Theme {
+  id          String      @id @default(cuid())
+  name        String      @unique
+  slug        String      @unique
+  description String?
+  order       Int         @default(0)
+  exhibitors  Exhibitor[] @relation("ExhibitorThemes")
+  createdAt   DateTime    @default(now())
+
+  @@index([slug])
+}
+
+model Favorite {
+  id          String    @id @default(cuid())
+  sessionId   String
+  exhibitorId String
+  exhibitor   Exhibitor @relation(fields: [exhibitorId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+
+  @@unique([sessionId, exhibitorId])
+  @@index([sessionId])
+}
+
+model AnalyticsEvent {
+  id          String   @id @default(cuid())
+  type        String
+  sessionId   String?
+  exhibitorId String?
+  searchQuery String?
+  payload     Json
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  @@index([type, createdAt])
+  @@index([sessionId])
+  @@index([exhibitorId])
+}
