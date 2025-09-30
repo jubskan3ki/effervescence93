@@ -196,7 +196,7 @@ export class ExhibitorsService {
 			if (dto.boothId) {
 				const booth = await tx.booth.findUnique({
 					where: { id: dto.boothId },
-					select: { id: true, exhibitor: true },
+					include: { exhibitor: true },
 				});
 				if (!booth) {
 					throw new BadRequestException('Stand non trouvé');
@@ -209,7 +209,8 @@ export class ExhibitorsService {
 			const slug = await this.uniqueSlug(slugBase, tx);
 
 			try {
-				return await tx.exhibitor.create({
+				// Créer l'exposant avec le booth connecté
+				const newExhibitor = await tx.exhibitor.create({
 					data: {
 						name,
 						slug,
@@ -238,6 +239,8 @@ export class ExhibitorsService {
 						contacts: true,
 					},
 				});
+
+				return newExhibitor;
 			} catch (e: any) {
 				if (e instanceof Prisma.PrismaClientKnownRequestError) {
 					if (e.code === 'P2002') {
@@ -248,18 +251,19 @@ export class ExhibitorsService {
 			}
 		});
 
-		// Invalide le cache de recherche
+		// Invalide le cache
 		this.cache.deletePattern(`${this.CACHE_PREFIX}search:*`);
+		this.cache.deletePattern('booth:*');
 
 		return exhibitor;
 	}
 
 	async update(id: string, dto: UpdateExhibitorDto) {
 		const exhibitor = await this.prisma.$transaction(async (tx) => {
-			// Vérifier que l'exposant existe
+			// Vérifier que l'exposant existe avec son booth actuel
 			const existing = await tx.exhibitor.findUnique({
 				where: { id },
-				select: { id: true, slug: true },
+				select: { id: true, slug: true, boothId: true },
 			});
 			if (!existing) {
 				throw new NotFoundException('Exposant non trouvé');
@@ -294,21 +298,26 @@ export class ExhibitorsService {
 				data.sector = { connect: { id: dto.sectorId } };
 			}
 
-			// Mise à jour du stand
+			// Gestion du changement de stand
 			if (dto.boothId !== undefined) {
 				if (dto.boothId) {
+					// Vérifier le nouveau stand
 					const booth = await tx.booth.findUnique({
 						where: { id: dto.boothId },
-						select: { id: true, exhibitor: { select: { id: true } } },
+						include: { exhibitor: { select: { id: true } } },
 					});
 					if (!booth) {
 						throw new BadRequestException('Stand non trouvé');
 					}
+					// Vérifier si le stand est déjà occupé par un autre exposant
 					if (booth.exhibitor && booth.exhibitor.id !== id) {
 						throw new ConflictException('Ce stand est déjà occupé par un autre exposant');
 					}
+
+					// Connecter le nouveau stand
 					data.booth = { connect: { id: dto.boothId } };
 				} else {
+					// Déconnecter le stand (mettre boothId à null)
 					data.booth = { disconnect: true };
 				}
 			}
@@ -346,26 +355,46 @@ export class ExhibitorsService {
 		this.cache.delete(`${this.CACHE_PREFIX}id:${id}`);
 		this.cache.delete(`${this.CACHE_PREFIX}slug:${exhibitor.slug}`);
 		this.cache.deletePattern(`${this.CACHE_PREFIX}search:*`);
+		this.cache.deletePattern('booth:*'); // Invalider aussi le cache des booths
 
 		return exhibitor;
 	}
 
 	async delete(id: string) {
 		try {
-			const deleted = await this.prisma.exhibitor.delete({
-				where: { id },
-				select: { id: true, slug: true },
+			const deleted = await this.prisma.$transaction(async (tx) => {
+				// Vérifier que l'exposant existe
+				const exhibitor = await tx.exhibitor.findUnique({
+					where: { id },
+					select: { id: true, slug: true },
+				});
+
+				if (!exhibitor) {
+					throw new NotFoundException('Exposant non trouvé');
+				}
+
+				// Supprimer l'exposant (la relation avec le booth sera automatiquement déconnectée)
+				const result = await tx.exhibitor.delete({
+					where: { id },
+					select: { id: true, slug: true },
+				});
+
+				return result;
 			});
 
 			// Invalide le cache
 			this.cache.delete(`${this.CACHE_PREFIX}id:${id}`);
 			this.cache.delete(`${this.CACHE_PREFIX}slug:${deleted.slug}`);
 			this.cache.deletePattern(`${this.CACHE_PREFIX}search:*`);
+			this.cache.deletePattern('booth:*'); // Invalider aussi le cache des booths
 
 			return deleted;
 		} catch (e: any) {
 			if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
 				throw new NotFoundException('Exposant non trouvé');
+			}
+			if (e instanceof NotFoundException) {
+				throw e;
 			}
 			throw e;
 		}

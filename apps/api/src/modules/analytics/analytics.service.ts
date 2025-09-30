@@ -42,9 +42,12 @@ export class AnalyticsService {
 			_count: true,
 		});
 
-		// Sessions uniques
+		// Sessions uniques - CORRECTION: filtrer les sessionId null
 		const uniqueSessions = await this.prisma.analyticsEvent.findMany({
-			where,
+			where: {
+				...where,
+				sessionId: { not: null }, // IMPORTANT: exclure les null
+			},
 			select: { sessionId: true },
 			distinct: ['sessionId'],
 		});
@@ -62,16 +65,22 @@ export class AnalyticsService {
 			take: 10,
 		});
 
+		// Calculer les totaux par type pour retour cohérent
+		const eventsByType = eventCounts.reduce(
+			(acc, item) => {
+				acc[item.type] = item._count;
+				return acc;
+			},
+			{} as Record<string, number>
+		);
+
 		return {
 			totalEvents: await this.prisma.analyticsEvent.count({ where }),
-			uniqueSessions: uniqueSessions.filter((s) => s.sessionId).length,
-			eventsByType: eventCounts.reduce(
-				(acc, item) => {
-					acc[item.type] = item._count;
-					return acc;
-				},
-				{} as Record<string, number>
-			),
+			uniqueSessions: uniqueSessions.length, // Simplifié - déjà filtré
+			totalViews: eventsByType.view || 0,
+			totalSearches: eventsByType.search || 0,
+			totalFavorites: eventsByType.favorite || 0,
+			eventsByType,
 			topSearches: topSearches.map((s) => ({
 				query: s.searchQuery,
 				count: s._count,
@@ -79,8 +88,9 @@ export class AnalyticsService {
 		};
 	}
 
-	// Top exposants visités
+	// Top exposants visités avec nombre de favoris
 	async getTopExhibitors(limit: number) {
+		// 1. Obtenir les top vues
 		const topViews = await this.prisma.analyticsEvent.groupBy({
 			by: ['exhibitorId'],
 			where: {
@@ -92,25 +102,71 @@ export class AnalyticsService {
 			take: Math.min(limit, 50),
 		});
 
-		// Récupérer les infos des exposants
 		const exhibitorIds = topViews.map((v) => v.exhibitorId).filter(Boolean) as string[];
+
+		if (exhibitorIds.length === 0) {
+			return [];
+		}
+
+		// 2. Obtenir le nombre ACTUEL de favoris pour chaque exposant
+		const currentFavorites = await this.prisma.favorite.groupBy({
+			by: ['exhibitorId'],
+			where: {
+				exhibitorId: { in: exhibitorIds },
+			},
+			_count: true,
+		});
+
+		// Créer une map des favoris actuels
+		const favoritesMap = new Map(currentFavorites.map((f) => [f.exhibitorId, f._count]));
+
+		// 3. Récupérer les infos des exposants
 		const exhibitors = await this.prisma.exhibitor.findMany({
 			where: { id: { in: exhibitorIds } },
 			select: {
 				id: true,
 				name: true,
 				slug: true,
-				sector: { select: { name: true } },
+				sector: {
+					select: {
+						id: true,
+						name: true,
+						colorHex: true,
+					},
+				},
 			},
 		});
 
 		const exhibitorMap = new Map(exhibitors.map((e) => [e.id, e]));
 
+		// 4. Combiner toutes les données
 		return topViews
-			.map((view) => ({
-				exhibitor: exhibitorMap.get(view.exhibitorId!),
-				views: view._count,
-			}))
-			.filter((item) => item.exhibitor);
+			.map((view) => {
+				const exhibitor = exhibitorMap.get(view.exhibitorId!);
+				if (!exhibitor) return null;
+
+				return {
+					id: exhibitor.id,
+					name: exhibitor.name,
+					slug: exhibitor.slug,
+					sector: exhibitor.sector,
+					views: view._count,
+					favorites: favoritesMap.get(view.exhibitorId!) || 0,
+				};
+			})
+			.filter((item) => item !== null);
+	}
+
+	// Nouvelle méthode pour obtenir le compte des favoris par exposant
+	async getCurrentFavoritesCount() {
+		const favorites = await this.prisma.favorite.groupBy({
+			by: ['exhibitorId'],
+			_count: true,
+		});
+
+		return favorites.map((f) => ({
+			exhibitorId: f.exhibitorId,
+			count: f._count,
+		}));
 	}
 }

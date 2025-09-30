@@ -1,108 +1,106 @@
 // src/lib/stores/session.ts
+import { writable, derived, get } from 'svelte/store';
 
-import { nanoid } from 'nanoid';
-import { writable, derived } from 'svelte/store';
-
-import { APP_CONFIG } from '@lib/constants/config';
+import { browser } from '$app/environment';
+import type { User } from '$lib/types';
 
 interface SessionState {
-	id: string;
-	createdAt: Date;
-	lastActivity: Date;
+	sessionId: string | null;
+	user: User | null;
+	isAuthenticated: boolean;
+	isAdmin: boolean;
+	isEditor: boolean;
+	isInitialized: boolean;
 }
 
 function createSessionStore() {
-	let sessionId = '';
-	let createdAt = new Date();
-
-	// Initialize session ID from localStorage or create new one
-	if (typeof window !== 'undefined') {
-		const storedId = localStorage.getItem(APP_CONFIG.storage.sessionId);
-
-		if (storedId) {
-			sessionId = storedId;
-			// Try to get creation date from storage
-			const storedDate = localStorage.getItem(`${APP_CONFIG.storage.sessionId}_created`);
-			if (storedDate) {
-				createdAt = new Date(storedDate);
-			}
-		} else {
-			sessionId = nanoid();
-			localStorage.setItem(APP_CONFIG.storage.sessionId, sessionId);
-			localStorage.setItem(`${APP_CONFIG.storage.sessionId}_created`, createdAt.toISOString());
-		}
-	}
-
-	const { subscribe, set, update } = writable<SessionState>({
-		id: sessionId,
-		createdAt,
-		lastActivity: new Date(),
+	const { subscribe, update } = writable<SessionState>({
+		sessionId: null,
+		user: null,
+		isAuthenticated: false,
+		isAdmin: false,
+		isEditor: false,
+		isInitialized: false,
 	});
 
 	return {
 		subscribe,
 
-		getId(): string {
-			if (typeof window === 'undefined') return '';
-			return localStorage.getItem(APP_CONFIG.storage.sessionId) || '';
+		// Initialisation depuis les données du serveur
+		init(serverData?: { sessionId: string; user?: User | null }) {
+			if (serverData?.sessionId) {
+				update((state) => ({
+					...state,
+					sessionId: serverData.sessionId,
+					user: serverData.user || null,
+					isAuthenticated: !!serverData.user,
+					isAdmin: serverData.user?.role === 'ADMIN',
+					isEditor: serverData.user?.role === 'EDITOR' || serverData.user?.role === 'ADMIN',
+					isInitialized: true,
+				}));
+			} else if (browser) {
+				// Fallback si pas de données serveur
+				const sessionId = localStorage.getItem('eff93_session_id') || crypto.randomUUID();
+				if (!localStorage.getItem('eff93_session_id')) {
+					localStorage.setItem('eff93_session_id', sessionId);
+				}
+
+				update((state) => ({
+					...state,
+					sessionId,
+					isInitialized: true,
+				}));
+			}
 		},
 
-		regenerate() {
-			if (typeof window === 'undefined') return;
-
-			const newId = nanoid();
-			const now = new Date();
-
-			localStorage.setItem(APP_CONFIG.storage.sessionId, newId);
-			localStorage.setItem(`${APP_CONFIG.storage.sessionId}_created`, now.toISOString());
-
-			set({
-				id: newId,
-				createdAt: now,
-				lastActivity: now,
-			});
+		getSessionId(): string | null {
+			const state = get({ subscribe });
+			return state.sessionId;
 		},
 
-		updateActivity() {
+		setUser(user: User | null) {
 			update((state) => ({
 				...state,
-				lastActivity: new Date(),
+				user,
+				isAuthenticated: !!user,
+				isAdmin: user?.role === 'ADMIN',
+				isEditor: user?.role === 'EDITOR' || user?.role === 'ADMIN',
 			}));
 		},
 
 		clear() {
-			if (typeof window === 'undefined') return;
-
-			localStorage.removeItem(APP_CONFIG.storage.sessionId);
-			localStorage.removeItem(`${APP_CONFIG.storage.sessionId}_created`);
-
-			// Create new session
-			this.regenerate();
+			if (browser) {
+				localStorage.removeItem('eff93_token');
+				// On garde le sessionId même après logout
+			}
+			update((state) => ({
+				...state,
+				user: null,
+				isAuthenticated: false,
+				isAdmin: false,
+				isEditor: false,
+			}));
 		},
 
-		getAge(): number {
-			const state = this.getState();
-			if (!state) return 0;
-			return Date.now() - state.createdAt.getTime();
-		},
-
-		isExpired(): boolean {
-			return this.getAge() > APP_CONFIG.limits.sessionDuration;
-		},
-
-		getState(): SessionState | null {
-			let state: SessionState | null = null;
-			subscribe((s) => {
-				state = s;
-			})();
-			return state;
+		// Méthode pour vérifier si la session est prête
+		async waitForInit(): Promise<void> {
+			return new Promise((resolve) => {
+				const unsubscribe = subscribe((state) => {
+					if (state.isInitialized) {
+						unsubscribe();
+						resolve();
+					}
+				});
+			});
 		},
 	};
 }
 
-export const sessionStore = createSessionStore();
+export const session = createSessionStore();
 
 // Derived stores
-export const sessionId = derived(sessionStore, ($session) => $session.id);
-
-export const sessionAge = derived(sessionStore, ($session) => Date.now() - $session.createdAt.getTime());
+export const isAuthenticated = derived(session, ($session) => $session.isAuthenticated);
+export const isAdmin = derived(session, ($session) => $session.isAdmin);
+export const isEditor = derived(session, ($session) => $session.isEditor);
+export const currentUser = derived(session, ($session) => $session.user);
+export const sessionId = derived(session, ($session) => $session.sessionId);

@@ -1,181 +1,104 @@
 <!-- src/lib/components/admin/StatsCard.svelte -->
 <script lang="ts">
-	import Spinner from '../ui/Spinner.svelte';
+	export let title: string;
+	export let value: string | number;
+	export let change: number | null = null;
+	export let changeLabel = 'vs mois dernier';
+	export let icon: 'users' | 'exhibitors' | 'views' | 'revenue' = 'views';
+	export let color: 'blue' | 'green' | 'purple' | 'amber' = 'blue';
 
-	interface Props {
-		title: string;
-		value: string | number;
-		subtitle?: string;
-		change?: number;
-		changeLabel?: string;
-		icon?: string;
-		iconColor?: 'primary' | 'success' | 'warning' | 'danger' | 'info';
-		loading?: boolean;
-		href?: string;
-		chart?: any;
-		actions?: any;
-	}
-
-	let {
-		title,
-		value,
-		subtitle = '',
-		change,
-		changeLabel = '',
-		icon = '',
-		iconColor = 'primary',
-		loading = false,
-		href = '',
-		chart,
-		actions,
-	}: Props = $props();
-
-	const isPositiveChange = $derived(change !== undefined && change > 0);
-	const isNegativeChange = $derived(change !== undefined && change < 0);
-
-	const iconColors = {
-		primary: 'bg-primary-100 text-primary-600',
-		success: 'bg-green-100 text-green-600',
-		warning: 'bg-yellow-100 text-yellow-600',
-		danger: 'bg-red-100 text-red-600',
-		info: 'bg-blue-100 text-blue-600',
+	const colorClasses = {
+		blue: 'bg-blue-100 text-blue-600',
+		green: 'bg-green-100 text-green-600',
+		purple: 'bg-purple-100 text-purple-600',
+		amber: 'bg-amber-100 text-amber-600',
 	};
-
-	const iconBgClass = $derived(iconColors[iconColor]);
-
-	const formattedChange = $derived(() => {
-		if (change === undefined) return null;
-		const sign = change > 0 ? '+' : '';
-		return `${sign}${change.toFixed(1)}%`;
-	});
-
-	const Component = href ? 'a' : 'div';
 </script>
 
-<svelte:element
-	this={Component}
-	{href}
-	class="bg-white rounded-lg border border-gray-200 p-6 hover:shadow-lg transition-shadow duration-200 {href
-		? 'cursor-pointer'
-		: ''}"
->
-	<div class="flex items-start justify-between">
-		<div class="flex-1">
-			<!-- Header -->
-			<div class="flex items-center justify-between mb-2">
-				<h3 class="text-sm font-medium text-gray-600">
-					{title}
-				</h3>
-				{#if actions}
-					<div class="ml-4">
-						{@render actions()}
-					</div>
-				{/if}
-			</div>
-
-			<!-- Value -->
-			{#if loading}
-				<div class="mb-4">
-					<Spinner size="md" />
-				</div>
-			{:else}
-				<div class="mb-2">
-					<p class="text-2xl font-bold text-gray-900">
-						{value}
-					</p>
-				</div>
-			{/if}
-
-			<!-- Change indicator -->
-			{#if change !== undefined && !loading}
-				<div class="flex items-center gap-2 mb-2">
-					{#if isPositiveChange}
-						<div class="flex items-center text-green-600">
-							<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-								<path
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									stroke-width="2"
-									d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"
-								/>
-							</svg>
-							<span class="ml-1 text-sm font-medium">
-								{formattedChange()}
-							</span>
-						</div>
-					{:else if isNegativeChange}
-						<div class="flex items-center text-red-600">
-							<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-								<path
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									stroke-width="2"
-									d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6"
-								/>
-							</svg>
-							<span class="ml-1 text-sm font-medium">
-								{formattedChange()}
-							</span>
-						</div>
-					{:else}
-						<div class="flex items-center text-gray-500">
-							<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14" />
-							</svg>
-							<span class="ml-1 text-sm font-medium">
-								{formattedChange()}
-							</span>
-						</div>
-					{/if}
-
-					{#if changeLabel}
-						<span class="text-sm text-gray-500">
-							{changeLabel}
-						</span>
-					{/if}
-				</div>
-			{/if}
-
-			<!-- Subtitle -->
-			{#if subtitle && !loading}
-				<p class="text-xs text-gray-500">
-					{subtitle}
-				</p>
-			{/if}
-
-			<!-- Chart -->
-			{#if chart && !loading}
-				<div class="mt-4">
-					{@render chart()}
-				</div>
+<div class="stats-card">
+	<div class="card-header">
+		<div class="icon-wrapper {colorClasses[color]}">
+			{#if icon === 'users'}
+				<svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+					<path
+						d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"
+					/>
+				</svg>
+			{:else if icon === 'exhibitors'}
+				<svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+					<path
+						d="M12 2l-5.5 9h11L12 2zm0 3.84L13.93 9h-3.87L12 5.84zM17.5 13c-2.49 0-4.5 2.01-4.5 4.5s2.01 4.5 4.5 4.5 4.5-2.01 4.5-4.5-2.01-4.5-4.5-4.5zm0 7a2.5 2.5 0 010-5 2.5 2.5 0 010 5zM3 21.5h8v-8H3v8zm2-6h4v4H5v-4z"
+					/>
+				</svg>
+			{:else if icon === 'views'}
+				<svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+					<path
+						d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"
+					/>
+				</svg>
+			{:else if icon === 'revenue'}
+				<svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+					<path
+						d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"
+					/>
+				</svg>
 			{/if}
 		</div>
-
-		<!-- Icon -->
-		{#if icon}
-			<div class="ml-4">
-				<div class="p-3 rounded-lg {iconBgClass}">
-					{@html icon}
-				</div>
-			</div>
-		{/if}
+		<h3 class="card-title">{title}</h3>
 	</div>
 
-	<!-- Link indicator -->
-	{#if href}
-		<div class="mt-4 flex items-center text-sm text-primary-600 font-medium">
-			<span>Voir les détails</span>
-			<svg class="ml-1 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-			</svg>
+	<div class="card-value">
+		{value}
+	</div>
+
+	{#if change !== null}
+		<div class="card-change">
+			<span class="change-value" class:positive={change > 0} class:negative={change < 0}>
+				{change > 0 ? '+' : ''}{change}%
+			</span>
+			<span class="change-label">{changeLabel}</span>
 		</div>
 	{/if}
-</svelte:element>
+</div>
 
 <style>
-	/* Mini chart styles if needed */
-	:global(.mini-chart) {
-		height: 60px;
-		width: 100%;
+	.stats-card {
+		@apply bg-white rounded-lg shadow-sm p-6 space-y-4;
+	}
+
+	.card-header {
+		@apply flex items-center gap-4;
+	}
+
+	.icon-wrapper {
+		@apply p-3 rounded-lg;
+	}
+
+	.card-title {
+		@apply text-sm font-medium text-gray-500;
+	}
+
+	.card-value {
+		@apply text-3xl font-bold text-gray-900;
+	}
+
+	.card-change {
+		@apply flex items-center gap-2 text-sm;
+	}
+
+	.change-value {
+		@apply font-semibold;
+	}
+
+	.change-value.positive {
+		@apply text-green-600;
+	}
+
+	.change-value.negative {
+		@apply text-red-600;
+	}
+
+	.change-label {
+		@apply text-gray-500;
 	}
 </style>

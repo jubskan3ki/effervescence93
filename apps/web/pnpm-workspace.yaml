@@ -1,5 +1,6 @@
 ignoredBuiltDependencies:
   - '@sveltejs/kit'
+  - '@tailwindcss/oxide'
   - esbuild
   - svelte-preprocess
   - unrs-resolver

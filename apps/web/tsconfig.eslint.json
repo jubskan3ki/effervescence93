@@ -2,8 +2,17 @@
 	"extends": "./tsconfig.json",
 	"compilerOptions": {
 		"allowJs": true,
-		"noEmit": true
+		"noEmit": true,
+		"moduleResolution": "bundler",
+		"allowImportingTsExtensions": true
 	},
-	"include": ["src/**/*.ts", "src/**/*.svelte"],
-	"exclude": ["node_modules", "dist", ".svelte-kit"]
+	"include": [
+		"src/**/*.ts",
+		"src/**/*.js",
+		"src/**/*.svelte",
+		"src/**/*.d.ts",
+		".svelte-kit/ambient.d.ts",
+		".svelte-kit/types/**/$types.d.ts"
+	],
+	"exclude": ["node_modules", "dist", "build", ".svelte-kit/output"]
 }

@@ -309,6 +309,7 @@ export class BoothsService {
 			// Invalide le cache de liste et d'area
 			this.cache.deletePattern(`${this.CACHE_PREFIX}list:*`);
 			this.cache.deletePattern(`${this.CACHE_PREFIX}area:*`);
+			this.cache.deletePattern('exhibitor:*');
 
 			return booth;
 		} catch (e) {
@@ -328,7 +329,10 @@ export class BoothsService {
 
 	async update(id: string, dto: UpdateBoothDto) {
 		// Vérifie que le stand existe
-		const existing = await this.prisma.booth.findUnique({ where: { id } });
+		const existing = await this.prisma.booth.findUnique({
+			where: { id },
+			include: { exhibitor: true },
+		});
 		if (!existing) {
 			throw new NotFoundException('Stand non trouvé');
 		}
@@ -376,6 +380,12 @@ export class BoothsService {
 			this.cache.deletePattern(`${this.CACHE_PREFIX}list:*`);
 			this.cache.deletePattern(`${this.CACHE_PREFIX}area:*`);
 
+			if (existing.exhibitor) {
+				this.cache.delete(`exhibitor:id:${existing.exhibitor.id}`);
+				this.cache.delete(`exhibitor:slug:${existing.exhibitor.slug}`);
+				this.cache.deletePattern('exhibitor:search:*');
+			}
+
 			return booth;
 		} catch (e) {
 			if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
@@ -394,8 +404,15 @@ export class BoothsService {
 
 	async remove(id: string) {
 		try {
+			// D'abord, on doit déconnecter l'exposant s'il y en a un
+			await this.prisma.exhibitor.updateMany({
+				where: { boothId: id },
+				data: { boothId: null },
+			});
+
 			const booth = await this.prisma.booth.delete({
 				where: { id },
+				include: { exhibitor: true },
 			});
 
 			// Invalide le cache
@@ -404,6 +421,7 @@ export class BoothsService {
 			this.cache.delete(`${this.CACHE_PREFIX}polygon:${booth.polygonId}`);
 			this.cache.deletePattern(`${this.CACHE_PREFIX}list:*`);
 			this.cache.deletePattern(`${this.CACHE_PREFIX}area:*`);
+			this.cache.deletePattern('exhibitor:*');
 
 			return booth;
 		} catch (e) {
@@ -423,10 +441,14 @@ export class BoothsService {
 				const [total, occupied, available, bounds] = await Promise.all([
 					this.prisma.booth.count(),
 					this.prisma.booth.count({
-						where: { exhibitor: { isNot: null } },
+						where: {
+							exhibitor: { isNot: null },
+						},
 					}),
 					this.prisma.booth.count({
-						where: { exhibitor: null },
+						where: {
+							exhibitor: null,
+						},
 					}),
 					// Calcul des limites du canvas
 					this.prisma.booth.aggregate({
@@ -465,10 +487,30 @@ export class BoothsService {
 	async isAvailable(boothId: string): Promise<boolean> {
 		const booth = await this.prisma.booth.findUnique({
 			where: { id: boothId },
-			select: { exhibitor: true },
+			include: { exhibitor: true },
 		});
 
-		return booth ? booth.exhibitor === null : false;
+		return booth ? !booth.exhibitor : false;
+	}
+
+	async getAvailableBooths(excludeExhibitorId?: string) {
+		let currentBoothId: string | null = null;
+		if (excludeExhibitorId) {
+			const exhibitor = await this.prisma.exhibitor.findUnique({
+				where: { id: excludeExhibitorId },
+				select: { boothId: true },
+			});
+			currentBoothId = exhibitor?.boothId || null;
+		}
+
+		const booths = await this.prisma.booth.findMany({
+			where: {
+				OR: [{ exhibitor: null }, ...(currentBoothId ? [{ id: currentBoothId }] : [])],
+			},
+			orderBy: { number: 'asc' },
+		});
+
+		return booths;
 	}
 
 	// Nouvelle méthode pour obtenir les stands proches d'un point
@@ -537,6 +579,7 @@ export class BoothsService {
 
 			// Invalide tout le cache
 			this.cache.deletePattern(`${this.CACHE_PREFIX}*`);
+			this.cache.deletePattern('exhibitor:*');
 
 			return {
 				created: result.count,

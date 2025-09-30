@@ -1,196 +1,277 @@
 // src/lib/stores/favorites.ts
-
 import { writable, derived, get } from 'svelte/store';
 
-import { API_ENDPOINTS } from '@lib/constants/api';
-import { APP_CONFIG } from '@lib/constants/config';
-import type { Exhibitor } from '@lib/types/models';
+import { browser } from '$app/environment';
+import * as api from '$lib/api';
+import { getSessionId } from '$lib/api/client';
+import type { Exhibitor, FavoriteItem } from '$lib/types';
 
-interface FavoritesState {
-	items: string[]; // Exhibitor IDs
+interface FavoriteState {
+	ids: Set<string>;
+	data: Map<string, Exhibitor>;
 	isLoading: boolean;
-	error: string | null;
+	isInitialized: boolean;
+	lastSync: Date | null;
 }
 
+const STORAGE_KEY = 'eff93_favorites';
+const SYNC_INTERVAL = 5 * 60 * 1000; // 5 minutes
+
 function createFavoritesStore() {
-	const { subscribe, update } = writable<FavoritesState>({
-		items: [],
+	const { subscribe, set, update } = writable<FavoriteState>({
+		ids: new Set(),
+		data: new Map(),
 		isLoading: false,
-		error: null,
+		isInitialized: false,
+		lastSync: null,
 	});
 
-	// Initialize from localStorage
-	if (typeof window !== 'undefined') {
-		const stored = localStorage.getItem(APP_CONFIG.storage.favorites);
-		if (stored) {
-			try {
-				const items = JSON.parse(stored);
-				if (Array.isArray(items)) {
-					update((state) => ({ ...state, items }));
-				}
-			} catch (e) {
-				console.error('Failed to load favorites from storage:', e);
-			}
+	// Sauvegarder dans localStorage et cookie
+	function persist(ids: Set<string>) {
+		if (!browser) return;
+
+		const idsArray = Array.from(ids);
+		localStorage.setItem(STORAGE_KEY, JSON.stringify(idsArray));
+
+		// Cookie non-httpOnly pour SSR
+		document.cookie = `eff93_favorites=${encodeURIComponent(JSON.stringify(idsArray))}; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Lax`;
+	}
+
+	// Charger depuis localStorage
+	function loadFromStorage(): Set<string> {
+		if (!browser) return new Set();
+
+		try {
+			const stored = localStorage.getItem(STORAGE_KEY);
+			return stored ? new Set(JSON.parse(stored)) : new Set();
+		} catch {
+			return new Set();
 		}
 	}
 
-	// Get session ID
-	const getSessionId = () => {
-		if (typeof window === 'undefined') return '';
-		return localStorage.getItem(APP_CONFIG.storage.sessionId) || '';
-	};
+	// Synchroniser avec l'API
+	async function syncWithAPI(): Promise<void> {
+		const sessionId = getSessionId();
+		if (!sessionId) return;
 
-	// Save to localStorage
-	const saveToStorage = (items: string[]) => {
-		if (typeof window !== 'undefined') {
-			localStorage.setItem(APP_CONFIG.storage.favorites, JSON.stringify(items));
+		try {
+			const apiResponse = await api.favorites.list();
+			const apiData = new Map<string, Exhibitor>();
+			const apiIds = new Set<string>();
+
+			apiResponse.forEach((item: FavoriteItem) => {
+				if (item.exhibitor) {
+					apiIds.add(item.exhibitor.id);
+					apiData.set(item.exhibitor.id, item.exhibitor);
+				}
+			});
+
+			update((state) => ({
+				...state,
+				ids: apiIds,
+				data: apiData,
+				lastSync: new Date(),
+			}));
+
+			persist(apiIds);
+		} catch (error) {
+			console.error('Sync with API failed:', error);
 		}
-	};
+	}
 
 	return {
 		subscribe,
 
-		async add(exhibitorId: string) {
-			const state = get({ subscribe });
-
-			// Check if already in favorites
-			if (state.items.includes(exhibitorId)) {
-				return;
-			}
-
-			// Check max limit
-			if (state.items.length >= APP_CONFIG.limits.maxFavorites) {
-				update((s) => ({
-					...s,
-					error: `Maximum de ${APP_CONFIG.limits.maxFavorites} favoris atteint`,
+		// Initialisation
+		async init(serverIds?: string[]) {
+			// Si on a des IDs du serveur, les utiliser
+			if (serverIds && serverIds.length > 0) {
+				update((state) => ({
+					...state,
+					ids: new Set(serverIds),
+					isInitialized: true,
 				}));
-				return;
-			}
-
-			// Optimistic update
-			const newItems = [...state.items, exhibitorId];
-			update((s) => ({ ...s, items: newItems, error: null }));
-			saveToStorage(newItems);
-
-			// Send to API
-			try {
-				await fetch(API_ENDPOINTS.FAVORITES.ADD, {
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json',
-						'x-session-id': getSessionId(),
-					},
-					body: JSON.stringify({ exhibitorId }),
-				});
-			} catch (error) {
-				console.error('Failed to sync favorite:', error);
-				// Keep the local change even if API fails
-			}
-		},
-
-		async remove(exhibitorId: string) {
-			const state = get({ subscribe });
-
-			// Optimistic update
-			const newItems = state.items.filter((id) => id !== exhibitorId);
-			update((s) => ({ ...s, items: newItems, error: null }));
-			saveToStorage(newItems);
-
-			// Send to API
-			try {
-				await fetch(API_ENDPOINTS.FAVORITES.REMOVE(exhibitorId), {
-					method: 'DELETE',
-					headers: {
-						'x-session-id': getSessionId(),
-					},
-				});
-			} catch (error) {
-				console.error('Failed to sync favorite removal:', error);
-				// Keep the local change even if API fails
-			}
-		},
-
-		toggle(exhibitorId: string) {
-			const state = get({ subscribe });
-			if (state.items.includes(exhibitorId)) {
-				this.remove(exhibitorId);
 			} else {
-				this.add(exhibitorId);
+				// Sinon charger depuis localStorage
+				const localIds = loadFromStorage();
+				update((state) => ({
+					...state,
+					ids: localIds,
+					isInitialized: true,
+				}));
+			}
+
+			// Lancer une sync en arrière-plan si on a une session
+			if (browser && getSessionId()) {
+				update((state) => ({ ...state, isLoading: true }));
+				await syncWithAPI();
+				update((state) => ({ ...state, isLoading: false }));
 			}
 		},
 
-		has(exhibitorId: string): boolean {
+		// Ajouter un favori
+		async add(exhibitor: Exhibitor): Promise<boolean> {
 			const state = get({ subscribe });
-			return state.items.includes(exhibitorId);
-		},
 
-		async load() {
-			update((state) => ({ ...state, isLoading: true, error: null }));
+			// Si déjà en favori, retourner true sans rien faire
+			if (state.ids.has(exhibitor.id)) return true;
 
+			// Mise à jour optimiste
+			update((s) => {
+				const newIds = new Set(s.ids).add(exhibitor.id);
+				const newData = new Map(s.data).set(exhibitor.id, exhibitor);
+				persist(newIds);
+				return { ...s, ids: newIds, data: newData };
+			});
+
+			// Sync avec API et track seulement si ajout réussi
 			try {
-				const response = await fetch(API_ENDPOINTS.FAVORITES.LIST, {
-					headers: {
-						'x-session-id': getSessionId(),
-					},
-				});
-
-				if (!response.ok) {
-					throw new Error('Failed to load favorites');
+				const success = await api.favorites.add(exhibitor.id);
+				if (success) {
+					// Track l'ajout seulement ici
+					await api.analytics.trackFavorite(exhibitor.id, 'add');
+					return true;
 				}
-
-				const favorites: Exhibitor[] = await response.json();
-				const items = favorites.map((f) => f.id);
-
-				update((state) => ({
-					...state,
-					items,
-					isLoading: false,
-				}));
-
-				saveToStorage(items);
 			} catch (error) {
-				console.error('Failed to load favorites:', error);
-				update((state) => ({
-					...state,
-					isLoading: false,
-					error: 'Impossible de charger les favoris',
-				}));
+				console.error('Failed to add favorite:', error);
 			}
+
+			// Rollback si échec
+			update((s) => {
+				const newIds = new Set(s.ids);
+				newIds.delete(exhibitor.id);
+				const newData = new Map(s.data);
+				newData.delete(exhibitor.id);
+				persist(newIds);
+				return { ...s, ids: newIds, data: newData };
+			});
+
+			return false;
 		},
 
-		async clear() {
-			// Optimistic update
-			update((state) => ({ ...state, items: [], error: null }));
+		// Retirer un favori
+		async remove(exhibitorId: string): Promise<boolean> {
+			const state = get({ subscribe });
 
-			if (typeof window !== 'undefined') {
-				localStorage.removeItem(APP_CONFIG.storage.favorites);
-			}
+			// Si pas en favori, retourner true sans rien faire
+			if (!state.ids.has(exhibitorId)) return true;
 
-			// Send to API
+			const exhibitor = state.data.get(exhibitorId);
+
+			// Mise à jour optimiste
+			update((s) => {
+				const newIds = new Set(s.ids);
+				newIds.delete(exhibitorId);
+				const newData = new Map(s.data);
+				newData.delete(exhibitorId);
+				persist(newIds);
+				return { ...s, ids: newIds, data: newData };
+			});
+
+			// Sync avec API - PAS de track pour remove
 			try {
-				await fetch(API_ENDPOINTS.FAVORITES.CLEAR, {
-					method: 'DELETE',
-					headers: {
-						'x-session-id': getSessionId(),
-					},
-				});
+				const success = await api.favorites.remove(exhibitorId);
+				if (success) {
+					// Track le remove pour les stats par exposant seulement
+					await api.analytics.trackFavorite(exhibitorId, 'remove');
+					return true;
+				}
 			} catch (error) {
-				console.error('Failed to clear favorites:', error);
+				console.error('Failed to remove favorite:', error);
+			}
+
+			// Rollback si échec
+			if (exhibitor) {
+				update((s) => {
+					const newIds = new Set(s.ids).add(exhibitorId);
+					const newData = new Map(s.data).set(exhibitorId, exhibitor);
+					persist(newIds);
+					return { ...s, ids: newIds, data: newData };
+				});
+			}
+
+			return false;
+		},
+
+		// Toggle favori
+		async toggle(exhibitor: Exhibitor): Promise<boolean> {
+			const state = get({ subscribe });
+			if (state.ids.has(exhibitor.id)) {
+				await this.remove(exhibitor.id);
+				return false;
+			} else {
+				await this.add(exhibitor);
+				return true;
 			}
 		},
 
-		clearError() {
-			update((state) => ({ ...state, error: null }));
+		// Vider tous les favoris
+		async clear(): Promise<void> {
+			const prevState = get({ subscribe });
+
+			// Mise à jour optimiste
+			update((s) => ({ ...s, ids: new Set(), data: new Map() }));
+			persist(new Set());
+
+			// Sync avec API
+			try {
+				const success = await api.favorites.clear();
+				if (success) {
+					// Track le clear
+					await api.analytics.trackFavorite('', 'clear');
+				} else {
+					throw new Error('Failed to clear');
+				}
+			} catch (error) {
+				// Rollback si échec
+				set(prevState);
+				persist(prevState.ids);
+				throw error;
+			}
+		},
+
+		// Rafraîchir depuis l'API
+		async refresh(): Promise<void> {
+			const state = get({ subscribe });
+			const now = new Date();
+
+			// Ne pas sync trop souvent
+			if (state.lastSync && now.getTime() - state.lastSync.getTime() < SYNC_INTERVAL) {
+				return;
+			}
+
+			update((s) => ({ ...s, isLoading: true }));
+			await syncWithAPI();
+			update((s) => ({ ...s, isLoading: false }));
+		},
+
+		// Vérifier si un exposant est en favori
+		isFavorite(exhibitorId: string): boolean {
+			const state = get({ subscribe });
+			return state.ids.has(exhibitorId);
+		},
+
+		// Récupérer les données complètes des favoris
+		async loadFavoritesData(exhibitors: Exhibitor[]): Promise<void> {
+			const state = get({ subscribe });
+			const newData = new Map(state.data);
+
+			exhibitors.forEach((exhibitor) => {
+				if (state.ids.has(exhibitor.id)) {
+					newData.set(exhibitor.id, exhibitor);
+				}
+			});
+
+			update((s) => ({ ...s, data: newData }));
 		},
 	};
 }
 
-export const favoritesStore = createFavoritesStore();
+export const favorites = createFavoritesStore();
 
 // Derived stores
-export const favoriteCount = derived(favoritesStore, ($favorites) => $favorites.items.length);
-
-export const hasFavorites = derived(favoritesStore, ($favorites) => $favorites.items.length > 0);
-
-export const isFavorite = (exhibitorId: string) =>
-	derived(favoritesStore, ($favorites) => $favorites.items.includes(exhibitorId));
+export const favoriteIds = derived(favorites, ($f) => $f.ids);
+export const favoritesCount = derived(favorites, ($f) => $f.ids.size);
+export const favoritesArray = derived(favorites, ($f) => Array.from($f.data.values()));
+export const favoritesLoading = derived(favorites, ($f) => $f.isLoading);
+export const isFavoritesInitialized = derived(favorites, ($f) => $f.isInitialized);

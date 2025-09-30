@@ -1,236 +1,168 @@
 // src/lib/stores/ui.ts
+import { writable, derived } from 'svelte/store';
 
-import type { ComponentType } from 'svelte';
-import { writable, derived, get } from 'svelte/store';
-
-// Types
-interface Modal {
-	id: string;
-	component: ComponentType | null;
-	props?: Record<string, any>;
-	closable?: boolean;
-}
-
-interface Toast {
-	id: string;
-	type: 'success' | 'error' | 'info' | 'warning';
-	message: string;
-	duration?: number;
-	action?: {
-		label: string;
-		onClick: () => void;
-	};
-}
+import { browser } from '$app/environment';
 
 interface UIState {
-	// Modals
-	modals: Modal[];
-
-	// Toasts
-	toasts: Toast[];
-
-	// Drawers
+	// Navigation
+	isSidebarOpen: boolean;
 	isMobileMenuOpen: boolean;
-	isSearchDrawerOpen: boolean;
-	isFilterDrawerOpen: boolean;
+	isSearchOpen: boolean;
 
-	// Loading
-	isPageLoading: boolean;
-	loadingMessage: string | null;
+	// Modals
+	activeModal: string | null;
+	modalData: any;
 
-	// Theme
+	// Map
+	isMapFullscreen: boolean;
+	showLegend: boolean;
+	showFilters: boolean;
+
+	// Preferences
 	theme: 'light' | 'dark' | 'auto';
+	reducedMotion: boolean;
+
+	// Loading states
+	globalLoading: boolean;
+	loadingMessage: string;
+
+	// Device
+	isMobile: boolean;
+	isTablet: boolean;
+	isDesktop: boolean;
 }
 
 function createUIStore() {
-	const initialState: UIState = {
-		modals: [],
-		toasts: [],
+	const { subscribe, set, update } = writable<UIState>({
+		isSidebarOpen: false,
 		isMobileMenuOpen: false,
-		isSearchDrawerOpen: false,
-		isFilterDrawerOpen: false,
-		isPageLoading: false,
-		loadingMessage: null,
-		theme: 'light',
-	};
-
-	const { subscribe, set, update } = writable<UIState>(initialState);
-
-	// Toast auto-dismiss
-	const dismissToast = (id: string) => {
-		update((state) => ({
-			...state,
-			toasts: state.toasts.filter((t) => t.id !== id),
-		}));
-	};
-
-	const addToast = (toast: Omit<Toast, 'id'>) => {
-		const id = Math.random().toString(36).slice(2);
-		const newToast: Toast = { ...toast, id };
-
-		update((state) => ({
-			...state,
-			toasts: [...state.toasts, newToast],
-		}));
-
-		// Auto dismiss after duration
-		if (toast.duration !== 0) {
-			setTimeout(() => {
-				dismissToast(id);
-			}, toast.duration || 5000);
-		}
-
-		return id;
-	};
+		isSearchOpen: false,
+		activeModal: null,
+		modalData: null,
+		isMapFullscreen: false,
+		showLegend: true,
+		showFilters: false,
+		theme: 'auto',
+		reducedMotion: false,
+		globalLoading: false,
+		loadingMessage: '',
+		isMobile: false,
+		isTablet: false,
+		isDesktop: true,
+	});
 
 	return {
 		subscribe,
 
-		// Modals
-		openModal(component: ComponentType, props?: Record<string, any>, closable = true) {
-			const id = Math.random().toString(36).slice(2);
-			update((state) => ({
-				...state,
-				modals: [...state.modals, { id, component, props, closable }],
-			}));
-			return id;
+		init() {
+			if (!browser) return;
+
+			// Load preferences
+			const theme = (localStorage.getItem('eff93_theme') as 'light' | 'dark' | 'auto') || 'auto';
+			const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+			// Detect device
+			this.detectDevice();
+			window.addEventListener('resize', () => this.detectDevice());
+
+			// Apply theme
+			this.setTheme(theme);
+
+			update((s) => ({ ...s, theme, reducedMotion }));
 		},
 
-		closeModal(id?: string) {
-			if (id) {
-				update((state) => ({
-					...state,
-					modals: state.modals.filter((m) => m.id !== id),
-				}));
-			} else {
-				// Close the last modal
-				update((state) => ({
-					...state,
-					modals: state.modals.slice(0, -1),
-				}));
+		detectDevice() {
+			if (!browser) return;
+
+			const width = window.innerWidth;
+			const isMobile = width < 640;
+			const isTablet = width >= 640 && width < 1024;
+			const isDesktop = width >= 1024;
+
+			update((s) => ({ ...s, isMobile, isTablet, isDesktop }));
+
+			// Auto-close sidebar on mobile
+			if (isMobile) {
+				update((s) => ({ ...s, isSidebarOpen: false }));
 			}
 		},
 
-		closeAllModals() {
-			update((state) => ({ ...state, modals: [] }));
+		toggleSidebar() {
+			update((s) => ({ ...s, isSidebarOpen: !s.isSidebarOpen }));
 		},
 
-		// Toasts
-		toast: {
-			success(message: string, options?: Partial<Toast>) {
-				return addToast({ ...options, type: 'success', message });
-			},
-
-			error(message: string, options?: Partial<Toast>) {
-				return addToast({ ...options, type: 'error', message });
-			},
-
-			info(message: string, options?: Partial<Toast>) {
-				return addToast({ ...options, type: 'info', message });
-			},
-
-			warning(message: string, options?: Partial<Toast>) {
-				return addToast({ ...options, type: 'warning', message });
-			},
-
-			dismiss(id?: string) {
-				if (id) {
-					dismissToast(id);
-				} else {
-					update((state) => ({ ...state, toasts: [] }));
-				}
-			},
-
-			dismissAll() {
-				update((state) => ({ ...state, toasts: [] }));
-			},
+		toggleMobileMenu() {
+			update((s) => ({ ...s, isMobileMenuOpen: !s.isMobileMenuOpen }));
 		},
 
-		// Mobile menu
-		toggleMobileMenu(open?: boolean) {
-			update((state) => ({
-				...state,
-				isMobileMenuOpen: open ?? !state.isMobileMenuOpen,
-			}));
+		toggleSearch() {
+			update((s) => ({ ...s, isSearchOpen: !s.isSearchOpen }));
 		},
 
-		// Search drawer
-		toggleSearchDrawer(open?: boolean) {
-			update((state) => ({
-				...state,
-				isSearchDrawerOpen: open ?? !state.isSearchDrawerOpen,
-			}));
+		toggleMapFullscreen() {
+			update((s) => ({ ...s, isMapFullscreen: !s.isMapFullscreen }));
 		},
 
-		// Filter drawer
-		toggleFilterDrawer(open?: boolean) {
-			update((state) => ({
-				...state,
-				isFilterDrawerOpen: open ?? !state.isFilterDrawerOpen,
-			}));
+		toggleLegend() {
+			update((s) => ({ ...s, showLegend: !s.showLegend }));
 		},
 
-		// Loading
-		setPageLoading(isLoading: boolean, message?: string) {
-			update((state) => ({
-				...state,
-				isPageLoading: isLoading,
-				loadingMessage: message || null,
-			}));
+		toggleFilters() {
+			update((s) => ({ ...s, showFilters: !s.showFilters }));
 		},
 
-		showLoading(message = 'Chargement...') {
-			this.setPageLoading(true, message);
+		openModal(modalId: string, data?: any) {
+			update((s) => ({ ...s, activeModal: modalId, modalData: data }));
 		},
 
-		hideLoading() {
-			this.setPageLoading(false);
+		closeModal() {
+			update((s) => ({ ...s, activeModal: null, modalData: null }));
 		},
 
-		// Theme
 		setTheme(theme: 'light' | 'dark' | 'auto') {
-			update((state) => ({ ...state, theme }));
+			if (!browser) return;
+
+			localStorage.setItem('eff93_theme', theme);
 
 			// Apply theme to document
-			if (typeof document !== 'undefined') {
-				if (
-					theme === 'dark' ||
-					(theme === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
-				) {
-					document.documentElement.classList.add('dark');
-				} else {
-					document.documentElement.classList.remove('dark');
-				}
+			if (theme === 'dark' || (theme === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+				document.documentElement.classList.add('dark');
+			} else {
+				document.documentElement.classList.remove('dark');
 			}
+
+			update((s) => ({ ...s, theme }));
 		},
 
-		toggleTheme() {
-			const state = get({ subscribe });
-			this.setTheme(state.theme === 'light' ? 'dark' : 'light');
+		setGlobalLoading(loading: boolean, message = '') {
+			update((s) => ({ ...s, globalLoading: loading, loadingMessage: message }));
 		},
 
-		// Reset
 		reset() {
-			set(initialState);
+			set({
+				isSidebarOpen: false,
+				isMobileMenuOpen: false,
+				isSearchOpen: false,
+				activeModal: null,
+				modalData: null,
+				isMapFullscreen: false,
+				showLegend: true,
+				showFilters: false,
+				theme: 'auto',
+				reducedMotion: false,
+				globalLoading: false,
+				loadingMessage: '',
+				isMobile: false,
+				isTablet: false,
+				isDesktop: true,
+			});
 		},
 	};
 }
 
-export const uiStore = createUIStore();
+export const ui = createUIStore();
 
 // Derived stores
-export const modals = derived(uiStore, ($ui) => $ui.modals);
+export const isAnyMenuOpen = derived(ui, ($ui) => $ui.isSidebarOpen || $ui.isMobileMenuOpen || $ui.isSearchOpen);
 
-export const toasts = derived(uiStore, ($ui) => $ui.toasts);
-
-export const hasModals = derived(uiStore, ($ui) => $ui.modals.length > 0);
-
-export const isMobileMenuOpen = derived(uiStore, ($ui) => $ui.isMobileMenuOpen);
-
-export const isSearchDrawerOpen = derived(uiStore, ($ui) => $ui.isSearchDrawerOpen);
-
-export const isFilterDrawerOpen = derived(uiStore, ($ui) => $ui.isFilterDrawerOpen);
-
-export const isPageLoading = derived(uiStore, ($ui) => $ui.isPageLoading);
-
-export const theme = derived(uiStore, ($ui) => $ui.theme);
+export const isMobileOrTablet = derived(ui, ($ui) => $ui.isMobile || $ui.isTablet);

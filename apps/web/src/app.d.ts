@@ -1,28 +1,36 @@
-// src/app.d.ts
+// src/app.d.ts (ou src/routes/+layout.ts pour les types)
+import type { User } from '$lib/types';
 
-/// <reference types="@sveltejs/kit" />
-
-// See https://kit.svelte.dev/docs/types#app
-// for information about these interfaces
 declare global {
 	namespace App {
 		interface Error {
-			message: string;
 			code?: string;
+			message: string;
 		}
-
 		interface Locals {
-			user?: {
-				id: string;
-				email: string;
-				role: string;
-			};
+			user?: User | null;
 		}
 
-		interface PageData {}
+		interface PageData {
+			sessionId?: string;
+			user?: User | null;
+			initialFavorites?: string[];
+		}
 
-		interface Platform {}
+		interface Error {
+			message?: string;
+			status?: number;
+		}
 	}
+	const __APP_VERSION__: string;
+	const __APP_MODE__: 'public' | 'admin';
+}
+
+// Pour le layout.server.ts
+export interface LayoutServerData {
+	sessionId: string;
+	user?: User | null;
+	initialFavorites: string[];
 }
 
 export {};

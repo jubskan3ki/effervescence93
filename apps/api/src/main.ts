@@ -48,12 +48,19 @@ async function bootstrap() {
 		);
 	}
 
-	// CORS configuré proprement
+	// CORS configuré proprement - CORRECTION ICI
 	app.enableCors({
 		origin: env.NODE_ENV === 'production' ? env.CORS_ORIGIN.split(',').map((origin) => origin.trim()) : true,
 		credentials: true,
 		methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-		allowedHeaders: ['Content-Type', 'Authorization'],
+		allowedHeaders: [
+			'Content-Type',
+			'Authorization',
+			'x-session-id', // Ajout de x-session-id
+			'X-Requested-With',
+			'Accept',
+		],
+		exposedHeaders: ['x-session-id'], // Exposer l'en-tête aussi
 	});
 
 	app.use(cookieParser());
@@ -111,6 +118,7 @@ async function bootstrap() {
 
 	console.log(`🚀 API démarrée sur http://localhost:${port}`);
 	console.log(`🔧 Environment: ${env.NODE_ENV}`);
+	console.log(`🌐 CORS Origin: ${env.CORS_ORIGIN || 'All origins (dev)'}`);
 
 	if (env.NODE_ENV !== 'production') {
 		console.log(`📚 Documentation: http://localhost:${port}/docs`);

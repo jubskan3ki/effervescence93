@@ -1,18 +1,41 @@
 ﻿import { sveltekit } from '@sveltejs/kit/vite';
-import path from 'node:path';
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 
-export default defineConfig({
-	plugins: [sveltekit()],
-	define: {
-		__PUBLIC_API_URL__: JSON.stringify(process.env.PUBLIC_API_URL || 'http://localhost:8080'),
-	},
-	resolve: {
-		alias: {
-			'@lib': path.resolve('./src/lib'),
-			'@api': path.resolve('./src/lib/api'),
-			'@stores': path.resolve('./src/lib/stores'),
-			'@components': path.resolve('./src/lib/components'),
+export default defineConfig(({ mode }) => {
+	const env = loadEnv(mode, process.cwd(), '');
+
+	return {
+		plugins: [sveltekit()],
+		define: {
+			__APP_VERSION__: JSON.stringify(process.env.npm_package_version || '1.0.0'),
 		},
-	},
+		optimizeDeps: {
+			include: [
+				'@fortawesome/fontawesome-free',
+				'@tanstack/svelte-query',
+				'svelte-sonner',
+				'date-fns',
+				'clsx',
+				'zod',
+			],
+		},
+		build: {
+			rollupOptions: {
+				output: {
+					manualChunks: (id) => {
+						if (id.includes('node_modules')) {
+							if (id.includes('@tanstack')) return 'tanstack';
+							if (id.includes('date-fns') || id.includes('clsx') || id.includes('zod')) return 'utils';
+							return 'vendor';
+						}
+					},
+				},
+			},
+		},
+		server: {
+			host: true,
+			port: 3000,
+			strictPort: true,
+		},
+	};
 });

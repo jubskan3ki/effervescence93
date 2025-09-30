@@ -1,18 +1,29 @@
-﻿// apps/web/svelte.config.js
-import adapter from '@sveltejs/adapter-node';
-import { resolve } from 'path';
-import { sveltePreprocess } from 'svelte-preprocess';
+﻿import adapter from '@sveltejs/adapter-node';
+import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
-	preprocess: sveltePreprocess(),
+	preprocess: vitePreprocess(),
+
 	kit: {
-		adapter: adapter(),
+		adapter: adapter({
+			out: 'build',
+			precompress: false,
+			envPrefix: '',
+		}),
 		alias: {
-			'@components': resolve('src/lib/components'),
-			'@lib': resolve('src/lib'),
-			'@stores': resolve('src/lib/stores'),
-			'@api': resolve('src/lib/api'),
+			$lib: './src/lib',
+			'$lib/*': './src/lib/*',
+			'@components': './src/lib/components',
+			'@components/*': './src/lib/components/*',
+			'@api': './src/lib/api',
+			'@api/*': './src/lib/api/*',
+			'@stores': './src/lib/stores',
+			'@stores/*': './src/lib/stores/*',
+			'@types': './src/lib/types',
+			'@types/*': './src/lib/types/*',
+			'@utils': './src/lib/utils',
+			'@utils/*': './src/lib/utils/*',
 		},
 	},
 };
