@@ -14,7 +14,6 @@
 
 	import { ui } from '$lib/stores/ui';
 	import { favoriteIds, favorites } from '$lib/stores/favorites';
-	import { analytics } from '$lib/api/analytics';
 	import * as api from '$lib/api';
 
 	import type { Booth, Exhibitor } from '$lib/types';
@@ -151,10 +150,6 @@
 
 		selectedBooth = booth;
 		selectedExhibitor = exhibitor || null;
-
-		if (exhibitor) {
-			analytics.trackView(exhibitor.id, 'map');
-		}
 	}
 
 	function handleClosePopup() {

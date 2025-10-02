@@ -37,7 +37,7 @@ export const analytics = {
 				method: 'POST',
 				body: JSON.stringify({
 					...event,
-					sessionId: event.sessionId || getSessionId(), // Toujours inclure sessionId
+					sessionId: event.sessionId || getSessionId(),
 					userAgent: typeof window !== 'undefined' ? window.navigator.userAgent : undefined,
 				}),
 			});
