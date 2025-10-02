@@ -2,9 +2,7 @@
 export type CSVRow = Record<string, string | number | boolean | null | undefined>;
 
 /**
- * Queue "stable" (les colonnes de fin qu'on veut absolument réaligner par la droite).
- * On la calcule dynamiquement à partir du header trouvé, mais on garde cet ordre par défaut
- * pour le cas où un CSV manquerait certaines colonnes.
+ * Colonnes "stables" à réaligner par la droite en cas de décalage
  */
 const DEFAULT_STABLE_TAIL = [
 	'website_url',
@@ -18,208 +16,370 @@ const DEFAULT_STABLE_TAIL = [
 	'contacts_email',
 ];
 
+/* ------------------------------------------------------------------------------------ */
+/* Export CSV                                                                          */
+/* ------------------------------------------------------------------------------------ */
+
 export function toCSV(headers: string[], rows: CSVRow[]): string {
 	function esc(val: unknown): string {
 		if (val === null || val === undefined) return '';
-		const s = String(val);
-		if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+		const s = String(val).trim(); // Trim automatique
+
+		// Quote si contient: virgule, guillemet, retour ligne, ou commence/finit par espace
+		if (/[",\n\r]/.test(s) || s !== s.trim()) {
+			return `"${s.replace(/"/g, '""')}"`;
+		}
 		return s;
 	}
+
 	const head = headers.join(',');
 	const body = rows.map((r) => headers.map((h) => esc(r[h])).join(',')).join('\n');
 	return `${head}\n${body}`;
 }
 
 /* ------------------------------------------------------------------------------------ */
-/* Parsing                                                                             */
+/* Import CSV - Parsing robuste                                                        */
 /* ------------------------------------------------------------------------------------ */
 
-/** Nettoie BOM + normalise les retours ligne */
+/**
+ * Nettoie le CSV : BOM, normalise les retours ligne, trim les espaces parasites
+ */
 function normalizeInput(text: string): string {
-	// enlève le BOM éventuel
-	if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-	return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-}
-
-/** Détecte le séparateur (`,` ou `;`) en se basant sur la ligne d’en-tête + 2 lignes suivantes */
-function detectDelimiter(lines: string[]): ',' | ';' {
-	const sample = lines.slice(0, 3);
-	let commaScore = 0,
-		semiScore = 0;
-	for (const l of sample) {
-		commaScore += (l.match(/,/g) || []).length;
-		semiScore += (l.match(/;/g) || []).length;
+	// Enlève le BOM UTF-8 si présent
+	if (text.charCodeAt(0) === 0xfeff) {
+		text = text.slice(1);
 	}
-	return semiScore > commaScore ? ';' : ',';
-}
 
-/** Split RFC4180 d’une ligne, gestion des guillemets, double-guillemets, séparateur configurable */
-function splitCsvLine(line: string, delimiter: ',' | ';'): string[] {
-	const cols: string[] = [];
-	let v = '',
-		q = false;
-	for (let k = 0; k < line.length; k++) {
-		const ch = line[k];
-		if (ch === '"' && line[k + 1] === '"') {
-			v += '"';
-			k++;
-			continue;
-		}
-		if (ch === '"') {
-			q = !q;
-			continue;
-		}
-		if (!q && ch === delimiter) {
-			cols.push(v);
-			v = '';
-			continue;
-		}
-		v += ch;
-	}
-	cols.push(v);
-	return cols;
-}
+	// Normalise tous les types de retours ligne en \n
+	text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
-/** Construit les lignes logiques (respect des \n à l’intérieur des champs quotés) */
-function logicalLines(input: string): string[] {
-	const out: string[] = [];
-	let i = 0,
-		cur = '',
-		inQ = false;
-	while (i < input.length) {
-		const c = input[i];
-		if (c === '"' && input[i + 1] === '"') {
-			cur += '"';
-			i += 2;
-			continue;
-		}
-		if (c === '"') {
-			inQ = !inQ;
-			i++;
-			continue;
-		}
-		if (!inQ && c === '\n') {
-			out.push(cur);
-			cur = '';
-			i++;
-			continue;
-		}
-		cur += c;
-		i++;
-	}
-	if (cur !== '') out.push(cur);
-	return out;
+	// Enlève les espaces/tabs en fin de lignes (courant dans les exports)
+	text = text
+		.split('\n')
+		.map((line) => line.trimEnd())
+		.join('\n');
+
+	return text;
 }
 
 /**
- * Réaligne une ligne si le nombre de colonnes ≠ headers.length.
- * Principe :
- *  - on mappe la "tail" stable (website_url → contacts_email) par la droite
- *  - on remplit la tête jusqu’à "logo_url"
- *  - on concatène tout excédent au champ "description"
+ * Détecte le séparateur (, ou ;) sur les 3 premières lignes
+ */
+function detectDelimiter(lines: string[]): ',' | ';' {
+	const sample = lines.slice(0, 3);
+	let commaScore = 0;
+	let semiScore = 0;
+
+	for (const line of sample) {
+		// On compte en excluant les caractères dans les guillemets
+		let inQuote = false;
+		for (let i = 0; i < line.length; i++) {
+			const ch = line[i];
+			if (ch === '"' && line[i + 1] === '"') {
+				i++; // Skip escaped quote
+				continue;
+			}
+			if (ch === '"') {
+				inQuote = !inQuote;
+				continue;
+			}
+			if (!inQuote) {
+				if (ch === ',') commaScore++;
+				if (ch === ';') semiScore++;
+			}
+		}
+	}
+
+	return semiScore > commaScore ? ';' : ',';
+}
+
+/**
+ * Parse une ligne CSV selon RFC 4180
+ * Gère les guillemets, double-guillemets, et séparateur configurable
+ */
+function splitCsvLine(line: string, delimiter: ',' | ';'): string[] {
+	const cols: string[] = [];
+	let value = '';
+	let inQuote = false;
+
+	for (let i = 0; i < line.length; i++) {
+		const ch = line[i];
+
+		// Guillemet échappé ""
+		if (ch === '"' && line[i + 1] === '"') {
+			value += '"';
+			i++;
+			continue;
+		}
+
+		// Guillemet ouvrant/fermant
+		if (ch === '"') {
+			inQuote = !inQuote;
+			continue;
+		}
+
+		// Séparateur (seulement hors guillemets)
+		if (!inQuote && ch === delimiter) {
+			cols.push(value.trim()); // Trim chaque valeur
+			value = '';
+			continue;
+		}
+
+		value += ch;
+	}
+
+	// Dernière colonne
+	cols.push(value.trim());
+	return cols;
+}
+
+/**
+ * Construit les lignes logiques (gère les retours ligne dans les champs quotés)
+ */
+function logicalLines(input: string): string[] {
+	const lines: string[] = [];
+	let currentLine = '';
+	let inQuote = false;
+
+	for (let i = 0; i < input.length; i++) {
+		const ch = input[i];
+
+		// Guillemet échappé
+		if (ch === '"' && input[i + 1] === '"') {
+			currentLine += '""';
+			i++;
+			continue;
+		}
+
+		// Guillemet
+		if (ch === '"') {
+			inQuote = !inQuote;
+			currentLine += ch;
+			continue;
+		}
+
+		// Retour ligne (seulement hors guillemets = nouvelle ligne logique)
+		if (!inQuote && ch === '\n') {
+			if (currentLine.trim()) {
+				lines.push(currentLine);
+			}
+			currentLine = '';
+			continue;
+		}
+
+		currentLine += ch;
+	}
+
+	// Dernière ligne
+	if (currentLine.trim()) {
+		lines.push(currentLine);
+	}
+
+	return lines;
+}
+
+/**
+ * Réaligne une ligne si le nombre de colonnes ne correspond pas
+ * Principe:
+ *  - Mappe les colonnes "stable" de la fin par la droite
+ *  - Remplit la tête jusqu'à logo_url
+ *  - Concatène l'excédent dans description
  */
 function realignColumns(headers: string[], cols: string[], delimiter: ',' | ';'): string[] {
-	const need = headers.length;
-	if (cols.length === need) return cols.slice();
+	const expectedCount = headers.length;
+
+	// Si déjà bon, on retourne direct
+	if (cols.length === expectedCount) {
+		return cols.map((c) => c.trim());
+	}
 
 	const indexMap = new Map(headers.map((h, i) => [h, i]));
 	const stableTail = headers.filter((h) => DEFAULT_STABLE_TAIL.includes(h));
 	const tailLen = stableTail.length;
 
-	const out = new Array<string>(need).fill('');
+	const result = new Array<string>(expectedCount).fill('');
 
-	// 1) Remplir la queue "stable" depuis la droite du tableau source
+	// 1) Remplir la queue stable depuis la droite
 	for (let i = 0; i < tailLen; i++) {
 		const headerName = stableTail[tailLen - 1 - i];
-		const targetIdx = indexMap.get(headerName)!;
+		const targetIdx = indexMap.get(headerName);
 		const sourceIdx = cols.length - 1 - i;
-		if (sourceIdx >= 0) out[targetIdx] = (cols[sourceIdx] ?? '').trim();
-	}
 
-	// 2) On traite la "tête" jusqu’à description
-	const descIdx = indexMap.get('description') ?? -1;
-	const logoIdx = indexMap.get('logo_url') ?? -1;
-	const beforeDescHeaders: string[] = [];
-	for (let i = 0; i < headers.length; i++) {
-		const h = headers[i];
-		if (i < logoIdx) beforeDescHeaders.push(h); // tout jusqu’à logo_url (exclu)
-		if (i === logoIdx) {
-			beforeDescHeaders.push(h);
-			break;
+		if (targetIdx !== undefined && sourceIdx >= 0) {
+			result[targetIdx] = (cols[sourceIdx] ?? '').trim();
 		}
 	}
 
-	const headCount = beforeDescHeaders.length;
+	// 2) Remplir la tête (avant description)
+	const descIdx = indexMap.get('description') ?? -1;
+	const logoIdx = indexMap.get('logo_url') ?? -1;
+
+	const headHeaders: string[] = [];
+	for (let i = 0; i <= logoIdx && i < headers.length; i++) {
+		headHeaders.push(headers[i]);
+	}
+
+	const headCount = headHeaders.length;
 	const sourceLeftCount = Math.max(0, cols.length - tailLen);
 	const leftCols = cols.slice(0, sourceLeftCount);
 
-	// Remplir tous les champs avant description (jusqu'à logo_url)
 	for (let i = 0; i < headCount; i++) {
-		const h = beforeDescHeaders[i];
-		const targetIdx = indexMap.get(h)!;
-		out[targetIdx] = (leftCols[i] ?? '').trim();
+		const h = headHeaders[i];
+		const targetIdx = indexMap.get(h);
+		if (targetIdx !== undefined) {
+			result[targetIdx] = (leftCols[i] ?? '').trim();
+		}
 	}
 
-	// 3) Tout surplus côté gauche va dans description (concat)
+	// 3) Excédent → description
 	const extra = leftCols.slice(headCount);
-	if (descIdx >= 0 && extra.length) {
-		const joined = extra.filter((s) => s !== undefined && s !== null && String(s).length > 0).join(' ');
-		out[descIdx] = [out[descIdx], joined].filter(Boolean).join(' ');
+	if (descIdx >= 0 && extra.length > 0) {
+		const joined = extra
+			.filter((s) => s && String(s).trim())
+			.join(' ')
+			.trim();
+
+		if (joined) {
+			const existing = result[descIdx].trim();
+			result[descIdx] = existing ? `${existing} ${joined}` : joined;
+		}
 	}
 
-	// 4) Si la ligne est trop courte (ex: 16 au lieu de 17), pad à droite (déjà géré via Array.fill + affectations)
-	return out;
+	return result;
 }
 
-export function parseCSV(text: string): { headers: string[]; rows: CSVRow[] } {
-	const input = normalizeInput(text);
-	const linesRaw = logicalLines(input);
-	if (!linesRaw.length) return { headers: [], rows: [] };
+/**
+ * Validation et sécurité: détecte les injections CSV
+ */
+function sanitizeValue(value: string): string {
+	// Trim
+	value = value.trim();
 
-	// Détecter le séparateur le plus probable
-	const delimiter = detectDelimiter(linesRaw);
-	// Header
-	const rawHeader = (linesRaw.shift() || '').trim();
-	let headers = splitCsvLine(rawHeader, delimiter).map((s) => s.trim());
-
-	// Sécu : enlever headers vides et collisions
-	headers = headers.filter(Boolean);
-	const unique = new Set(headers);
-	if (unique.size !== headers.length) {
-		// en cas de doublon improbable, on suffixe
-		const seen = new Map<string, number>();
-		headers = headers.map((h) => {
-			const n = (seen.get(h) || 0) + 1;
-			seen.set(h, n);
-			return n === 1 ? h : `${h}_${n}`;
-		});
+	// Détection d'injection CSV (formules Excel/Sheets)
+	const dangerousStarts = ['=', '+', '-', '@', '\t', '\r'];
+	if (dangerousStarts.some((prefix) => value.startsWith(prefix))) {
+		console.warn(`[CSV Security] Potential formula injection detected: "${value.slice(0, 50)}"`);
+		// Préfixe avec ' pour neutraliser
+		return `'${value}`;
 	}
+
+	// Limite de longueur par sécurité (éviter les valeurs gigantesques)
+	const MAX_CELL_LENGTH = 50000;
+	if (value.length > MAX_CELL_LENGTH) {
+		console.warn(`[CSV Security] Value truncated (length: ${value.length})`);
+		return value.slice(0, MAX_CELL_LENGTH) + '... [truncated]';
+	}
+
+	return value;
+}
+
+/**
+ * Parse un CSV complet avec gestion robuste des erreurs
+ */
+export function parseCSV(text: string): {
+	headers: string[];
+	rows: CSVRow[];
+	warnings: string[];
+} {
+	const warnings: string[] = [];
+
+	// Validation initiale
+	if (!text?.trim()) {
+		warnings.push('Le fichier CSV est vide');
+		return { headers: [], rows: [], warnings };
+	}
+
+	// Normalisation
+	const normalized = normalizeInput(text);
+	const lines = logicalLines(normalized);
+
+	if (lines.length === 0) {
+		warnings.push('Aucune ligne trouvée après normalisation');
+		return { headers: [], rows: [], warnings };
+	}
+
+	// Détection du séparateur
+	const delimiter = detectDelimiter(lines);
+
+	// Header
+	const headerLine = lines.shift() || '';
+	if (!headerLine.trim()) {
+		warnings.push("La ligne d'en-tête est vide");
+		return { headers: [], rows: [], warnings };
+	}
+
+	let headers = splitCsvLine(headerLine, delimiter)
+		.map((h) => h.trim())
+		.filter(Boolean);
+
+	if (headers.length === 0) {
+		warnings.push("Aucune colonne trouvée dans l'en-tête");
+		return { headers: [], rows: [], warnings };
+	}
+
+	// Dédoublonnage des headers
+	const seen = new Map<string, number>();
+	headers = headers.map((h) => {
+		const count = (seen.get(h) || 0) + 1;
+		seen.set(h, count);
+		return count === 1 ? h : `${h}_${count}`;
+	});
 
 	// Parse des lignes
 	let fixCount = 0;
-	const rows = linesRaw
-		.filter((r) => r.trim().length)
-		.map((line, idx) => {
+	let errorCount = 0;
+
+	const rows: CSVRow[] = [];
+
+	for (let idx = 0; idx < lines.length; idx++) {
+		const line = lines[idx];
+
+		// Skip lignes vides
+		if (!line.trim()) continue;
+
+		try {
 			const cols = splitCsvLine(line, delimiter);
-			let arr = cols;
+			let aligned = cols;
+
+			// Réalignement si besoin
 			if (cols.length !== headers.length) {
 				fixCount++;
 
-				console.warn(
-					'[CSV][fix]',
-					`row#${idx + 1}: cols=${cols.length} ≠ headers=${headers.length} → realignColumns`
-				);
-				arr = realignColumns(headers, cols, delimiter);
-			}
-			const obj: CSVRow = {};
-			headers.forEach((h, j) => (obj[h] = (arr[j] ?? '').trim()));
-			return obj;
-		});
+				if (Math.abs(cols.length - headers.length) > 10) {
+					warnings.push(
+						`Ligne ${idx + 1}: écart important de colonnes (${cols.length} vs ${headers.length} attendues)`
+					);
+				}
 
-	// Log discret une seule fois si corrections
-	if (fixCount > 0) {
-		console.warn(`[CSV] ${fixCount} ligne(s) réalignée(s). Vérifie les champs description/website_url si besoin.`);
+				aligned = realignColumns(headers, cols, delimiter);
+			}
+
+			// Construction de l'objet avec sécurité
+			const row: CSVRow = {};
+			headers.forEach((h, j) => {
+				const rawValue = aligned[j] ?? '';
+				const sanitized = sanitizeValue(rawValue);
+				row[h] = sanitized;
+			});
+
+			rows.push(row);
+		} catch (error) {
+			errorCount++;
+			const message = error instanceof Error ? error.message : String(error);
+			warnings.push(`Ligne ${idx + 1}: Erreur de parsing - ${message}`);
+		}
 	}
 
-	return { headers, rows };
+	// Rapport final
+	if (fixCount > 0) {
+		warnings.push(`${fixCount} ligne(s) réalignée(s) automatiquement`);
+	}
+
+	if (errorCount > 0) {
+		warnings.push(`${errorCount} ligne(s) ignorée(s) suite à des erreurs`);
+	}
+
+	console.info(`[CSV] Parsed ${rows.length} rows with ${headers.length} columns`);
+
+	return { headers, rows, warnings };
 }

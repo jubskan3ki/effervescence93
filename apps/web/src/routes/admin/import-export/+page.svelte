@@ -39,6 +39,7 @@
 	let dragActive = false;
 	let importProgress = 0;
 	let totalRows = 0;
+	let parseWarnings: string[] = [];
 
 	// Stats
 	let stats = {
@@ -52,14 +53,12 @@
 	async function handleExport() {
 		exporting = true;
 		try {
-			// Récupération des données
 			const [exposants, secteurs, parcours] = await Promise.all([
 				exhibitors.listAll(),
 				sectors.list(),
 				themes.list(),
 			]);
 
-			// Reconstruction des stands via les relations
 			const standsMap = new Map();
 			for (const exp of exposants) {
 				if (exp.boothId) {
@@ -70,11 +69,9 @@
 				}
 			}
 
-			// Map pour accès rapide
 			const secteurMap = new Map(secteurs.map((s) => [s.id, s]));
 			const standMap = standsMap;
 
-			// Thèmes par exposant
 			const themesParExposant = new Map();
 			parcours.forEach((t) => {
 				(t.exhibitorIds || []).forEach((eid) => {
@@ -83,7 +80,6 @@
 				});
 			});
 
-			// Construction du CSV
 			const rows: CSVRow[] = exposants.map((e) => {
 				const secteur = secteurMap.get(e.sectorId);
 				const stand = e.boothId ? standMap.get(e.boothId) : null;
@@ -111,7 +107,6 @@
 				};
 			});
 
-			// Génération et téléchargement
 			const csv = toCSV(CSV_HEADERS, rows);
 			const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
 			const url = URL.createObjectURL(blob);
@@ -137,8 +132,10 @@
 		e.preventDefault();
 		dragActive = false;
 		const file = e.dataTransfer?.files?.[0];
-		if (file && file.type === 'text/csv') {
+		if (file && (file.type === 'text/csv' || file.name.endsWith('.csv'))) {
 			loadFile(file);
+		} else {
+			toast.error('Veuillez déposer un fichier CSV');
 		}
 	}
 
@@ -152,10 +149,29 @@
 	}
 
 	function loadFile(file: File) {
-		file.text().then((text) => {
-			importText = text;
-			toast.info(`Fichier chargé : ${file.name}`);
-		});
+		const reader = new FileReader();
+		reader.onload = (e) => {
+			importText = e.target?.result as string;
+			toast.info(`Fichier chargé : ${file.name} (${(file.size / 1024).toFixed(1)} Ko)`);
+
+			// Preview automatique
+			try {
+				const { headers, rows, warnings } = parseCSV(importText);
+				parseWarnings = warnings;
+
+				if (warnings.length > 0) {
+					toast.warning(`${warnings.length} avertissement(s) de parsing`);
+				} else {
+					toast.success(`Prêt à importer ${rows.length} lignes`);
+				}
+			} catch (error) {
+				toast.error('Erreur de lecture du fichier');
+			}
+		};
+		reader.onerror = () => {
+			toast.error('Erreur lors de la lecture du fichier');
+		};
+		reader.readAsText(file);
 	}
 
 	async function handleImport() {
@@ -167,34 +183,50 @@
 		importing = true;
 		importProgress = 0;
 		resultLog = [];
+		parseWarnings = [];
 		stats = { created: 0, updated: 0, skipped: 0, errors: 0 };
 
 		try {
-			// Parse CSV
-			const { headers, rows } = parseCSV(importText);
+			// Parse CSV avec le nouvel utilitaire
+			const { headers, rows, warnings } = parseCSV(importText);
+			parseWarnings = warnings;
 			totalRows = rows.length;
 
-			// Vérification des colonnes
-			const missing = CSV_HEADERS.filter((h) => !headers.includes(h));
-			if (missing.length) {
-				toast.error(`Colonnes manquantes : ${missing.join(', ')}`);
+			if (rows.length === 0) {
+				toast.error('Aucune donnée à importer');
 				importing = false;
 				return;
 			}
 
-			// Préchargement des données existantes
+			// Vérification des colonnes obligatoires
+			const requiredColumns = ['exhibitor_name'];
+			const missing = requiredColumns.filter((h) => !headers.includes(h));
+			if (missing.length) {
+				toast.error(`Colonnes obligatoires manquantes : ${missing.join(', ')}`);
+				importing = false;
+				return;
+			}
+
+			// Avertissement si colonnes manquantes (non bloquant)
+			const optionalMissing = CSV_HEADERS.filter(
+				(h) => !requiredColumns.includes(h) && !headers.includes(h)
+			);
+			if (optionalMissing.length) {
+				resultLog.push(`ℹ️ Colonnes absentes : ${optionalMissing.join(', ')}`);
+			}
+
+			// Préchargement
 			const [secteursList, themesList, exposantsList] = await Promise.all([
 				sectors.list(),
 				themes.list(),
 				exhibitors.listAll(),
 			]);
 
-			// Caches
 			const secteurCache = new Map(secteursList.map((s) => [s.name.toLowerCase(), s]));
 			const themeCache = new Map(themesList.map((t) => [t.name.toLowerCase(), t]));
 			const exposantCache = new Map(exposantsList.map((e) => [e.name.toLowerCase(), e]));
 
-			// Traitement ligne par ligne
+			// Traitement des lignes
 			for (let i = 0; i < rows.length; i++) {
 				const row = rows[i];
 				importProgress = ((i + 1) / totalRows) * 100;
@@ -202,12 +234,12 @@
 				const name = String(row.exhibitor_name || '').trim();
 				if (!name) {
 					stats.skipped++;
-					resultLog.push(`⚠️ Ligne ${i + 1} : Pas de nom d'exposant`);
+					resultLog.push(`⚠️ Ligne ${i + 1} : Nom d'exposant vide`);
 					continue;
 				}
 
 				try {
-					// Création/récupération du secteur
+					// Secteur
 					let secteur = secteurCache.get(String(row.sector_name || '').toLowerCase());
 					if (!secteur && row.sector_name) {
 						if (!dryRun) {
@@ -219,7 +251,7 @@
 						}
 					}
 
-					// Création/récupération du stand
+					// Stand
 					let stand = null;
 					const boothNumber = String(row.booth_number || '').trim();
 					if (boothNumber) {
@@ -239,14 +271,23 @@
 						}
 					}
 
-					// Données exposant
+					// Validation et nettoyage des URLs
+					const cleanUrl = (url: string | undefined) => {
+						if (!url) return undefined;
+						const cleaned = String(url).trim();
+						// Vérifie que c'est une URL valide
+						if (!cleaned.match(/^https?:\/\//i)) return undefined;
+						return cleaned;
+					};
+
+					// Payload
 					const payload = {
 						name,
-						logoUrl: String(row.logo_url || '').trim() || undefined,
+						logoUrl: cleanUrl(row.logo_url as string),
 						description: String(row.description || '').trim() || undefined,
-						websiteUrl: String(row.website_url || '').trim() || undefined,
-						linkedinUrl: String(row.linkedin_url || '').trim() || undefined,
-						pdfUrl: String(row.pdf_url || '').trim() || undefined,
+						websiteUrl: cleanUrl(row.website_url as string),
+						linkedinUrl: cleanUrl(row.linkedin_url as string),
+						pdfUrl: cleanUrl(row.pdf_url as string),
 						sectorId: secteur?.id || secteursList[0]?.id,
 						boothId: stand?.id,
 						contacts: row.contacts_email
@@ -279,7 +320,7 @@
 						resultLog.push(`✅ Créé : ${name}`);
 					}
 
-					// Gestion des thèmes
+					// Thèmes
 					if (row.theme) {
 						const themeNames = String(row.theme)
 							.split('|')
@@ -296,25 +337,24 @@
 				} catch (error) {
 					stats.errors++;
 					const errorMessage = error instanceof Error ? error.message : String(error);
-					resultLog.push(`❌ Erreur ligne ${i + 1} : ${errorMessage}`);
+					resultLog.push(`❌ Erreur ligne ${i + 1} (${name}) : ${errorMessage}`);
 				}
 			}
 
-			// Résumé
 			const message = dryRun
-				? `Simulation terminée : ${stats.created} à créer, ${stats.updated} à mettre à jour`
-				: `Import terminé : ${stats.created} créés, ${stats.updated} mis à jour`;
+				? `✅ Simulation : ${stats.created} à créer, ${stats.updated} à mettre à jour`
+				: `✅ Import terminé : ${stats.created} créés, ${stats.updated} mis à jour`;
 			toast.success(message);
 		} catch (error) {
 			console.error(error);
-			toast.error("Erreur lors de l'import");
+			const errorMessage = error instanceof Error ? error.message : String(error);
+			toast.error(`Erreur d'import : ${errorMessage}`);
 		} finally {
 			importing = false;
 			importProgress = 0;
 		}
 	}
 
-	// Raccourcis clavier
 	function handleKeydown(e: KeyboardEvent) {
 		if ((e.metaKey || e.ctrlKey) && e.key === 'e') {
 			e.preventDefault();
@@ -372,7 +412,7 @@
 						<div>
 							<h2 class="text-lg font-semibold text-gray-900 mb-2">Exporter les données</h2>
 							<p class="text-sm text-gray-600 mb-4">
-								Téléchargez l'ensemble des exposants, secteurs et stands au format CSV
+								Téléchargez l'ensemble des exposants au format CSV
 							</p>
 						</div>
 
@@ -383,9 +423,7 @@
 							</h3>
 							<div class="flex flex-wrap gap-2 mt-2">
 								{#each CSV_HEADERS as header}
-									<span
-										class="px-2 py-1 bg-white text-xs text-blue-700 rounded border border-blue-200"
-									>
+									<span class="px-2 py-1 bg-white text-xs text-blue-700 rounded border border-blue-200">
 										{header}
 									</span>
 								{/each}
@@ -423,14 +461,28 @@
 							</p>
 						</div>
 
+						<!-- Warnings de parsing -->
+						{#if parseWarnings.length > 0}
+							<div class="bg-amber-50 border border-amber-200 rounded-lg p-4">
+								<h3 class="text-sm font-medium text-amber-900 mb-2">
+									<i class="fas fa-exclamation-triangle mr-2"></i>
+									Avertissements de parsing ({parseWarnings.length})
+								</h3>
+								<ul class="text-xs text-amber-800 space-y-1 max-h-32 overflow-y-auto">
+									{#each parseWarnings as warning}
+										<li>• {warning}</li>
+									{/each}
+								</ul>
+							</div>
+						{/if}
+
 						<!-- Mode -->
 						<div class="bg-amber-50 border border-amber-200 rounded-lg p-4">
 							<label class="flex items-center gap-3 cursor-pointer">
 								<input
 									type="checkbox"
 									bind:checked={dryRun}
-									class="w-5 h-5 text-amber-600 rounded border-amber-300
-										focus:ring-amber-500 focus:ring-2"
+									class="w-5 h-5 text-amber-600 rounded border-amber-300 focus:ring-amber-500 focus:ring-2"
 								/>
 								<div>
 									<span class="font-medium text-amber-900">Mode simulation (dry-run)</span>
@@ -448,13 +500,20 @@
 							on:drop={handleDrop}
 							on:dragover={handleDragOver}
 							on:dragleave={handleDragLeave}
+							role="region"
+							aria-label="Zone de dépôt de fichier CSV"
 							class="relative border-2 border-dashed rounded-lg p-8 text-center transition-all
 								{dragActive ? 'border-primary-500 bg-primary-50' : 'border-gray-300 hover:border-gray-400'}"
 						>
 							<input
 								type="file"
-								accept=".csv"
-								on:change={(e) => loadFile(e.target.files[0])}
+								accept=".csv,text/csv"
+								on:change={(e) => {
+									const input = e.target as HTMLInputElement | null;
+									if (input && input.files && input.files[0]) {
+										loadFile(input.files[0]);
+									}
+								}}
 								bind:this={fileInput}
 								class="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
 							/>
@@ -462,9 +521,7 @@
 							<i class="fas fa-cloud-upload-alt text-4xl text-gray-400 mb-3"></i>
 							<p class="text-gray-600 font-medium mb-1">Glissez votre fichier CSV ici</p>
 							<p class="text-sm text-gray-500">
-								ou <button class="text-primary-600 hover:text-primary-700 font-medium">
-									parcourir
-								</button>
+								ou <span class="text-primary-600 hover:text-primary-700 font-medium">parcourir</span>
 							</p>
 						</div>
 
@@ -478,8 +535,7 @@
 								bind:value={importText}
 								placeholder="Collez votre CSV ici..."
 								class="mt-3 w-full h-40 px-3 py-2 text-sm border border-gray-300 rounded-lg
-									focus:ring-2 focus:ring-primary-500 focus:border-primary-500
-									font-mono text-xs"
+									focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono text-xs"
 							></textarea>
 						</details>
 
@@ -525,7 +581,9 @@
 						{#if resultLog.length > 0}
 							<div class="bg-gray-50 rounded-lg p-4">
 								<div class="flex justify-between items-center mb-2">
-									<h3 class="text-sm font-medium text-gray-700">Journal d'import</h3>
+									<h3 class="text-sm font-medium text-gray-700">
+										Journal d'import ({resultLog.length} entrées)
+									</h3>
 									<button
 										on:click={() => (resultLog = [])}
 										class="text-xs text-gray-500 hover:text-gray-700"

@@ -2,7 +2,7 @@ services:
     db:
         image: postgres:17-alpine
         env_file: .env
-        container_name: effervescence93-db
+        container_name: eff93-db
         environment:
             POSTGRES_USER: ${POSTGRES_USER}
             POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -10,9 +10,10 @@ services:
         volumes:
             - db_data:/var/lib/postgresql/data
         ports:
-            - '5432:5432'
+            - "5432:5432"
         healthcheck:
-            test: ['CMD-SHELL', 'pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB']
+            test:
+                ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
             interval: 5s
             timeout: 5s
             retries: 5
@@ -30,23 +31,23 @@ services:
                 condition: service_healthy
         volumes:
             - ./apps/api/prisma:/app/prisma
-        command: ['sh', '-c', './scripts/migrate.sh']
-        restart: 'no'
+        command: ["sh", "-c", "./scripts/migrate.sh"]
+        restart: "no"
         networks:
             - app-network
 
     api:
         build: ./apps/api
         env_file: .env
-        container_name: effervescence93-api
+        container_name: eff93-api
         environment:
-            NODE_ENV: ${NODE_ENV:-development}
+            NODE_ENV: ${NODE_ENV:-production}
             DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public
-            JWT_SECRET: ${JWT_SECRET:-your-secret-key}
+            JWT_SECRET: ${JWT_SECRET}
             UPLOAD_DIR: /app/uploads
             PORT: 8080
         ports:
-            - '8080:8080'
+            - "8080:8080"
         volumes:
             - uploads_data:/app/uploads
         depends_on:
@@ -54,31 +55,17 @@ services:
                 condition: service_healthy
         restart: unless-stopped
         healthcheck:
-            test: ['CMD', 'wget', '-qO-', 'http://localhost:8080/health']
+            test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
             interval: 30s
             timeout: 5s
             retries: 3
         networks:
             - app-network
 
-    web:
-        build:
-            context: ./apps/web
-            args:
-                VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
-        container_name: effervescence93-web
-        environment:
-            VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
-        ports:
-            - '3000:3000'
-        depends_on:
-            - api
-        networks:
-            - app-network
-
 volumes:
     db_data:
     uploads_data:
+
 networks:
     app-network:
         driver: bridge
